@@ -9,6 +9,7 @@ use denoise::{
     load_image,
     sharpen_image,
 };
+use denoise::filters::sharpen_image_luma;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -65,10 +66,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         denoise_image(image, args.strength)
     };
-    let final_image = if let Some(sharpen_strength) = args.sharpen {
-        sharpen_image(denoised, sharpen_strength)
-    } else {
-        denoised
+    let final_image = match (args.sharpen, args.experimental) {
+        (Some(sharpen_strength), true) => sharpen_image_luma(denoised, sharpen_strength),
+        (Some(sharpen_strength), false) => sharpen_image(denoised, sharpen_strength),
+        _ => denoised,
     };
     final_image.save(&output_path)?;
 
