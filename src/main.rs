@@ -1,9 +1,42 @@
 use std::path::{Path, PathBuf};
-use std::{env, process};
+use std::process;
 
+use clap::Parser;
 use image::{DynamicImage, ImageBuffer, ImageError, ImageFormat, ImageReader, Rgb};
 use imageproc::filter::gaussian_blur_f32;
 use rayon::prelude::*;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Input image path
+    #[arg(value_name = "INPUT")]
+    input: PathBuf,
+
+    /// Output image path (defaults to auto-named when omitted)
+    #[arg(short, long, value_name = "OUTPUT")]
+    output: Option<PathBuf>,
+
+    /// Denoise strength 1-5 (mild to strong)
+    #[arg(
+        short,
+        long,
+        value_name = "STRENGTH",
+        default_value_t = 3,
+        value_parser = clap::value_parser!(u8).range(1..=5)
+    )]
+    strength: u8,
+
+    /// Enable sharpening; optional strength 1-5, defaults to 3 when flag is given without a value
+    #[arg(
+        long,
+        value_name = "STRENGTH",
+        num_args = 0..=1,
+        default_missing_value = "3",
+        value_parser = clap::value_parser!(u8).range(1..=5)
+    )]
+    sharpen: Option<u8>,
+}
 
 fn main() {
     if let Err(err) = run() {
@@ -13,11 +46,14 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let (input_path, output_path, strength, sharpen) = parse_args()?;
+    let args = Args::parse();
+    let output_path =
+        args.output
+            .unwrap_or_else(|| default_output_path(&args.input, args.strength, args.sharpen));
 
-    let image = load_image(&input_path)?;
-    let denoised = denoise_image(image, strength);
-    let final_image = if let Some(sharpen_strength) = sharpen {
+    let image = load_image(&args.input)?;
+    let denoised = denoise_image(image, args.strength);
+    let final_image = if let Some(sharpen_strength) = args.sharpen {
         sharpen_image(denoised, sharpen_strength)
     } else {
         denoised
@@ -29,81 +65,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         output_path.display()
     );
     Ok(())
-}
-
-fn parse_args() -> Result<(PathBuf, PathBuf, u8, Option<u8>), String> {
-    let mut args: Vec<String> = env::args().skip(1).collect();
-    if args.is_empty() {
-        return Err(usage());
-    }
-
-    let input_path = PathBuf::from(args.remove(0));
-    let mut output_path: Option<PathBuf> = None;
-    let mut strength: Option<u8> = None;
-    let mut sharpen: Option<u8> = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--strength" | "-s" => {
-                let val = args
-                    .get(i + 1)
-                    .ok_or_else(|| "missing value after --strength".to_string())?;
-                strength = Some(parse_strength(val)?);
-                i += 2;
-            }
-            "--sharpen" => {
-                // Optional strength right after --sharpen; default to 3 if omitted.
-                if let Some(next) = args.get(i + 1) {
-                    if next.chars().all(|c| c.is_ascii_digit()) {
-                        sharpen = Some(parse_strength(next)?);
-                        i += 2;
-                        continue;
-                    }
-                }
-                sharpen = Some(3);
-                i += 1;
-            }
-            "--output" | "-o" => {
-                let val = args
-                    .get(i + 1)
-                    .ok_or_else(|| "missing value after --output".to_string())?;
-                output_path = Some(PathBuf::from(val));
-                i += 2;
-            }
-            other => {
-                // Positional fallbacks: first extra = output, second extra = strength number.
-                if output_path.is_none() && !other.chars().all(|c| c.is_ascii_digit()) {
-                    output_path = Some(PathBuf::from(other));
-                } else if strength.is_none() {
-                    strength = Some(parse_strength(other)?);
-                }
-                i += 1;
-            }
-        }
-    }
-
-    let strength = strength.unwrap_or(3);
-    let output_path =
-        output_path.unwrap_or_else(|| default_output_path(&input_path, strength, sharpen));
-
-    Ok((input_path, output_path, strength, sharpen))
-}
-
-fn usage() -> String {
-    "Usage: denoise <input.png> [output.png] [--strength 1-5] [--sharpen [1-5]]\n       denoise <input.png> [-o out.png] [--strength 1-5] [--sharpen [1-5]]"
-        .to_string()
-}
-
-fn parse_strength(raw: &str) -> Result<u8, String> {
-    let val: u8 = raw
-        .parse()
-        .map_err(|_| "strength must be a number between 1 and 5".to_string())?;
-    if (1..=5).contains(&val) {
-        Ok(val)
-    } else {
-        Err("strength must be between 1 (mild) and 5 (strong)".to_string())
-    }
 }
 
 fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>) -> PathBuf {
