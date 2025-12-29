@@ -1,26 +1,30 @@
 use image::{DynamicImage, ImageBuffer, Luma, Rgb};
 use imageproc::filter::gaussian_blur_f32;
 
-/// Experimental astrophotography-oriented denoiser.
+/// Experimental astrophotography-oriented denoiser (multi-scale, chroma-heavy).
 ///
 /// Goals:
-/// - Preserve nebulosity / faint structures by keeping luminance detail.
-/// - Protect stars by re-injecting positive high-frequency luminance.
-/// - Target color (chrominance) noise more aggressively than luminance noise.
+/// - Preserve nebulosity and faint dust by keeping medium-scale structure.
+/// - Keep stars: positive high-frequency detail is retained more than negative.
+/// - Hit color noise hard while leaving luminance detail comparatively intact.
 pub fn denoise_image_experimental(image: DynamicImage, strength: u8) -> DynamicImage {
     let rgb = image.to_rgb8();
     let (w, h) = rgb.dimensions();
 
-    // Tunables derived from strength (1-5).
-    let (sigma_luma, sigma_chroma) = match strength {
-        1 => (0.6, 1.0),
-        2 => (0.8, 1.2),
-        3 => (1.0, 1.4),
-        4 => (1.15, 1.55),
-        _ => (1.3, 1.7),
-    };
-    let sigma_star = 1.2;
-    let star_boost = 0.45;
+    // Tunables per strength (1-5).
+    // sigma_fine: small blur for fine detail separation.
+    // sigma_base: larger blur for coarse base.
+    // sigma_chroma: strong chroma smoothing (applied twice with blend).
+    // fine_thresh/coarse_thresh: soft-thresholds for detail suppression.
+    // gains: asymmetric to favor positive (star) detail over negative (noise).
+    let (sigma_fine, sigma_base, sigma_chroma, fine_thresh, coarse_thresh, fine_gain_pos, fine_gain_neg, coarse_gain, base_blend) =
+        match strength {
+            1 => (0.9, 1.8, 2.4, 2.2, 1.1, 0.85, 0.25, 0.80, 0.78),
+            2 => (1.05, 2.1, 2.7, 2.7, 1.3, 0.90, 0.26, 0.82, 0.78),
+            3 => (1.20, 2.4, 3.1, 3.2, 1.5, 0.95, 0.28, 0.85, 0.79),
+            4 => (1.35, 2.7, 3.4, 3.8, 1.8, 1.00, 0.30, 0.88, 0.80),
+            _ => (1.50, 3.0, 3.8, 4.4, 2.0, 1.05, 0.32, 0.90, 0.80),
+        };
 
     // Build Y, Cb, Cr planes as f32.
     let mut y_plane: ImageBuffer<Luma<f32>, Vec<f32>> = ImageBuffer::new(w, h);
@@ -42,24 +46,37 @@ pub fn denoise_image_experimental(image: DynamicImage, strength: u8) -> DynamicI
         cr_plane.put_pixel(x, y, Luma([cr]));
     }
 
-    // Soften luminance slightly.
-    let y_soft = gaussian_blur_f32(&y_plane, sigma_luma);
-    // Extract high-frequency luminance to protect stars/edges.
-    let y_star = gaussian_blur_f32(&y_plane, sigma_star);
+    // Multi-scale luminance: fine and base.
+    let y_blur_fine = gaussian_blur_f32(&y_plane, sigma_fine);
+    let y_blur_base = gaussian_blur_f32(&y_blur_fine, sigma_base);
 
-    // Smooth chroma more aggressively to knock down color noise.
-    let cb_smooth = gaussian_blur_f32(&cb_plane, sigma_chroma);
-    let cr_smooth = gaussian_blur_f32(&cr_plane, sigma_chroma);
+    // Strong chroma smoothing with two-stage blur to better remove color speckle.
+    let sigma_chroma2 = sigma_chroma * 1.2;
+    let cb_blur1 = gaussian_blur_f32(&cb_plane, sigma_chroma);
+    let cb_blur2 = gaussian_blur_f32(&cb_blur1, sigma_chroma2);
+    let cb_smooth = blend_planes(&cb_blur1, &cb_blur2, 0.5);
+
+    let cr_blur1 = gaussian_blur_f32(&cr_plane, sigma_chroma);
+    let cr_blur2 = gaussian_blur_f32(&cr_blur1, sigma_chroma2);
+    let cr_smooth = blend_planes(&cr_blur1, &cr_blur2, 0.5);
 
     let mut out = ImageBuffer::new(w, h);
     for (x, y, pixel) in out.enumerate_pixels_mut() {
         let y_orig = y_plane.get_pixel(x, y)[0];
-        let y_base = y_soft.get_pixel(x, y)[0];
-        let y_hp = (y_orig - y_star.get_pixel(x, y)[0]).clamp(-12.0, 18.0);
+        let fine = y_orig - y_blur_fine.get_pixel(x, y)[0];
+        let coarse = y_blur_fine.get_pixel(x, y)[0] - y_blur_base.get_pixel(x, y)[0];
 
-        // Re-inject positive high-frequency detail to preserve stars,
-        // allow a small amount of negative to avoid halos.
-        let y_final = y_base + star_boost * y_hp.max(0.0) + 0.2 * y_hp.min(0.0);
+        // Soft-threshold details.
+        let fine_d = soft_shrink(fine, fine_thresh);
+        let coarse_d = soft_shrink(coarse, coarse_thresh);
+
+        // Asymmetric gains: preserve stars (positive), suppress noise (negative).
+        let fine_term = fine_d.max(0.0) * fine_gain_pos + fine_d.min(0.0) * fine_gain_neg;
+        let coarse_term = coarse_d * coarse_gain;
+
+        // Base luminance blended with original to stabilize brightness and keep nebulosity glow.
+        let base = base_blend * y_blur_base.get_pixel(x, y)[0] + (1.0 - base_blend) * y_orig;
+        let y_final = base + coarse_term + fine_term;
 
         let cb = cb_smooth.get_pixel(x, y)[0];
         let cr = cr_smooth.get_pixel(x, y)[0];
@@ -77,5 +94,24 @@ pub fn denoise_image_experimental(image: DynamicImage, strength: u8) -> DynamicI
     }
 
     DynamicImage::ImageRgb8(out)
+}
+
+fn soft_shrink(v: f32, thresh: f32) -> f32 {
+    let mag = v.abs();
+    if mag <= thresh {
+        0.0
+    } else {
+        v.signum() * (mag - thresh)
+    }
+}
+
+fn blend_planes(a: &ImageBuffer<Luma<f32>, Vec<f32>>, b: &ImageBuffer<Luma<f32>, Vec<f32>>, alpha: f32) -> ImageBuffer<Luma<f32>, Vec<f32>> {
+    let mut out = ImageBuffer::new(a.width(), a.height());
+    for (x, y, pix) in out.enumerate_pixels_mut() {
+        let va = a.get_pixel(x, y)[0];
+        let vb = b.get_pixel(x, y)[0];
+        *pix = Luma([alpha * va + (1.0 - alpha) * vb]);
+    }
+    out
 }
 
