@@ -13,17 +13,25 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let (input_path, output_path, strength) = parse_args()?;
+    let (input_path, output_path, strength, sharpen) = parse_args()?;
 
     let image = load_image(&input_path)?;
     let denoised = denoise_image(image, strength);
-    denoised.save(&output_path)?;
+    let final_image = if let Some(sharpen_strength) = sharpen {
+        sharpen_image(denoised, sharpen_strength)
+    } else {
+        denoised
+    };
+    final_image.save(&output_path)?;
 
-    println!("Denoised image written to {}", output_path.display());
+    println!(
+        "Processed image written to {}",
+        output_path.display()
+    );
     Ok(())
 }
 
-fn parse_args() -> Result<(PathBuf, PathBuf, u8), String> {
+fn parse_args() -> Result<(PathBuf, PathBuf, u8, Option<u8>), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
         return Err(usage());
@@ -32,6 +40,7 @@ fn parse_args() -> Result<(PathBuf, PathBuf, u8), String> {
     let input_path = PathBuf::from(args.remove(0));
     let mut output_path: Option<PathBuf> = None;
     let mut strength: Option<u8> = None;
+    let mut sharpen: Option<u8> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -42,6 +51,18 @@ fn parse_args() -> Result<(PathBuf, PathBuf, u8), String> {
                     .ok_or_else(|| "missing value after --strength".to_string())?;
                 strength = Some(parse_strength(val)?);
                 i += 2;
+            }
+            "--sharpen" => {
+                // Optional strength right after --sharpen; default to 3 if omitted.
+                if let Some(next) = args.get(i + 1) {
+                    if next.chars().all(|c| c.is_ascii_digit()) {
+                        sharpen = Some(parse_strength(next)?);
+                        i += 2;
+                        continue;
+                    }
+                }
+                sharpen = Some(3);
+                i += 1;
             }
             "--output" | "-o" => {
                 let val = args
@@ -63,13 +84,14 @@ fn parse_args() -> Result<(PathBuf, PathBuf, u8), String> {
     }
 
     let strength = strength.unwrap_or(3);
-    let output_path = output_path.unwrap_or_else(|| default_output_path(&input_path, strength));
+    let output_path =
+        output_path.unwrap_or_else(|| default_output_path(&input_path, strength, sharpen));
 
-    Ok((input_path, output_path, strength))
+    Ok((input_path, output_path, strength, sharpen))
 }
 
 fn usage() -> String {
-    "Usage: denoise <input.png> [output.png] [--strength 1-5]\n       denoise <input.png> [-o out.png] [--strength 1-5]"
+    "Usage: denoise <input.png> [output.png] [--strength 1-5] [--sharpen [1-5]]\n       denoise <input.png> [-o out.png] [--strength 1-5] [--sharpen [1-5]]"
         .to_string()
 }
 
@@ -84,14 +106,17 @@ fn parse_strength(raw: &str) -> Result<u8, String> {
     }
 }
 
-fn default_output_path(input: &Path, strength: u8) -> PathBuf {
+fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>) -> PathBuf {
     let parent = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("image");
 
-    parent.join(format!("{stem}_denoised_strength-{strength}.png"))
+    let sharpen_suffix = sharpen.map(|s| format!("_sharpen-{s}")).unwrap_or_default();
+    parent.join(format!(
+        "{stem}_denoised_strength-{strength}{sharpen_suffix}.png"
+    ))
 }
 
 fn load_image(path: &Path) -> Result<DynamicImage, ImageError> {
@@ -130,6 +155,39 @@ fn denoise_image(image: DynamicImage, strength: u8) -> DynamicImage {
     let blurred = gaussian_blur_f32(&median_pass, sigma);
 
     DynamicImage::ImageRgb8(blurred)
+}
+
+fn sharpen_image(image: DynamicImage, strength: u8) -> DynamicImage {
+    let rgb = image.to_rgb8();
+
+    // Tuned unsharp mask parameters per strength level.
+    let (sigma, amount) = match strength {
+        1 => (0.5, 0.30),
+        2 => (0.6, 0.45),
+        3 => (0.8, 0.60),
+        4 => (1.0, 0.80),
+        _ => (1.2, 1.00), // strength 5+
+    };
+
+    let blurred = gaussian_blur_f32(&rgb, sigma);
+    let mut out = ImageBuffer::new(rgb.width(), rgb.height());
+
+    for (x, y, pixel) in out.enumerate_pixels_mut() {
+        let orig = rgb.get_pixel(x, y);
+        let blur = blurred.get_pixel(x, y);
+
+        let mut sharpened = [0u8; 3];
+        for c in 0..3 {
+            let o = orig[c] as f32;
+            let b = blur[c] as f32;
+            let val = o + amount * (o - b);
+            sharpened[c] = val.clamp(0.0, 255.0).round() as u8;
+        }
+
+        *pixel = Rgb(sharpened);
+    }
+
+    DynamicImage::ImageRgb8(out)
 }
 
 fn median_filter_parallel(img: &ImageBuffer<Rgb<u8>, Vec<u8>>, kernel: u32) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
