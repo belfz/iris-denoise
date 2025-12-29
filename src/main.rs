@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::Arc;
 
 use clap::Parser;
 use image::DynamicImage;
@@ -57,34 +56,42 @@ fn main() {
     }
 }
 
-type ImgFn = Arc<dyn Fn(DynamicImage, u8) -> DynamicImage + Send + Sync>;
-
-#[derive(Clone)]
-struct Pipelines {
-    denoise: ImgFn,
-    denoise_experimental: ImgFn,
-    sharpen: ImgFn,
-    sharpen_luma: ImgFn,
+#[cfg_attr(test, mockall::automock)]
+trait PipelineFns {
+    fn denoise(&self, img: DynamicImage, strength: u8) -> DynamicImage;
+    fn denoise_experimental(&self, img: DynamicImage, strength: u8) -> DynamicImage;
+    fn sharpen(&self, img: DynamicImage, strength: u8) -> DynamicImage;
+    fn sharpen_luma(&self, img: DynamicImage, strength: u8) -> DynamicImage;
 }
 
-impl Default for Pipelines {
-    fn default() -> Self {
-        Self {
-            denoise: Arc::new(|img, s| denoise_image(img, s)),
-            denoise_experimental: Arc::new(|img, s| denoise_image_experimental(img, s)),
-            sharpen: Arc::new(|img, s| sharpen_image(img, s)),
-            sharpen_luma: Arc::new(|img, s| sharpen_image_luma(img, s)),
-        }
+struct RealPipelines;
+
+impl PipelineFns for RealPipelines {
+    fn denoise(&self, img: DynamicImage, strength: u8) -> DynamicImage {
+        denoise_image(img, strength)
+    }
+
+    fn denoise_experimental(&self, img: DynamicImage, strength: u8) -> DynamicImage {
+        denoise_image_experimental(img, strength)
+    }
+
+    fn sharpen(&self, img: DynamicImage, strength: u8) -> DynamicImage {
+        sharpen_image(img, strength)
+    }
+
+    fn sharpen_luma(&self, img: DynamicImage, strength: u8) -> DynamicImage {
+        sharpen_image_luma(img, strength)
     }
 }
 
 fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-    run_with_pipelines(args, &Pipelines::default())
+    let mut pipelines = RealPipelines;
+    run_with_pipelines(args, &mut pipelines)
 }
 
 fn run_with_pipelines(
     args: Args,
-    pipelines: &Pipelines,
+    pipelines: &mut dyn PipelineFns,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let output_path =
         args.output
@@ -92,13 +99,13 @@ fn run_with_pipelines(
 
     let image = load_image(&args.input)?;
     let denoised = if args.experimental {
-        (pipelines.denoise_experimental)(image, args.strength)
+        pipelines.denoise_experimental(image, args.strength)
     } else {
-        (pipelines.denoise)(image, args.strength)
+        pipelines.denoise(image, args.strength)
     };
     let final_image = match (args.sharpen, args.experimental) {
-        (Some(sharpen_strength), true) => (pipelines.sharpen_luma)(denoised, sharpen_strength),
-        (Some(sharpen_strength), false) => (pipelines.sharpen)(denoised, sharpen_strength),
+        (Some(sharpen_strength), true) => pipelines.sharpen_luma(denoised, sharpen_strength),
+        (Some(sharpen_strength), false) => pipelines.sharpen(denoised, sharpen_strength),
         _ => denoised,
     };
     final_image.save(&output_path)?;
@@ -127,20 +134,10 @@ fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>, experime
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, ImageBuffer, Rgb, RgbImage};
+    use image::{ImageBuffer, Rgb, RgbImage};
+    use mockall::predicate::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp_dir(prefix: &str) -> PathBuf {
-        let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        dir.push(format!("{prefix}_{}_{}", std::process::id(), nanos));
-        fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
 
     fn write_test_image(path: &Path) {
         let mut img: RgbImage = ImageBuffer::new(3, 2);
@@ -155,38 +152,44 @@ mod tests {
         img.save(path).expect("save test image");
     }
 
-    #[test]
-    fn run_invokes_experimental_and_luma_sharpen_when_flagged() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
+    fn create_dir_and_input() -> (PathBuf, PathBuf) {
+        // create a temporary directory for the test
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        dir.push(format!("test_{}_{}", std::process::id(), nanos));
+        fs::create_dir_all(&dir).expect("create temp dir");
 
-        let exp_calls = Arc::new(AtomicUsize::new(0));
-        let luma_calls = Arc::new(AtomicUsize::new(0));
-
-        let exp_calls_clone = exp_calls.clone();
-        let luma_calls_clone = luma_calls.clone();
-
-        fn passthrough() -> DynamicImage {
-            DynamicImage::ImageRgb8(ImageBuffer::from_fn(1, 1, |_x, _y| Rgb([0, 0, 0])))
-        }
-
-        let pipelines = Pipelines {
-            denoise: Arc::new(|_img, _s| passthrough()),
-            denoise_experimental: Arc::new(move |img, _s| {
-                exp_calls_clone.fetch_add(1, Ordering::SeqCst);
-                img
-            }),
-            sharpen: Arc::new(|_img, _s| passthrough()),
-            sharpen_luma: Arc::new(move |img, _s| {
-                luma_calls_clone.fetch_add(1, Ordering::SeqCst);
-                img
-            }),
-        };
-
-        let dir = temp_dir("denoise_exp_calls");
+        // create a temporary input and output image in the directory
         let input = dir.join("input.png");
         let output = dir.join("out.png");
+        
+        // write the test image to the input
         write_test_image(&input);
+        
+        // return the input and output paths
+        (input, output)
+    }
+
+    #[test]
+    fn run_invokes_experimental_and_luma_sharpen_when_flagged() {
+        let mut pipelines = MockPipelineFns::new();
+        pipelines
+            .expect_denoise_experimental()
+            .times(1)
+            .with(always(), eq(3))
+            .returning(|img, _| img);
+        pipelines
+            .expect_sharpen_luma()
+            .times(1)
+            .with(always(), eq(2))
+            .returning(|img, _| img);
+        pipelines.expect_denoise().times(0);
+        pipelines.expect_sharpen().times(0);
+
+        let (input, output) = create_dir_and_input();
 
         let args = Args {
             input,
@@ -196,44 +199,22 @@ mod tests {
             experimental: true,
         };
 
-        run_with_pipelines(args, &pipelines).expect("run experimental with spies");
-
-        assert_eq!(exp_calls.load(Ordering::SeqCst), 1, "experimental denoise should be called once");
-        assert_eq!(luma_calls.load(Ordering::SeqCst), 1, "luma sharpen should be called once");
+        run_with_pipelines(args, &mut pipelines).expect("run experimental with spies");
     }
 
     #[test]
     fn run_invokes_standard_without_sharpen() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
+        let mut pipelines = MockPipelineFns::new();
+        pipelines
+            .expect_denoise()
+            .times(1)
+            .with(always(), eq(2))
+            .returning(|img, _| img);
+        pipelines.expect_sharpen().times(0);
+        pipelines.expect_denoise_experimental().times(0);
+        pipelines.expect_sharpen_luma().times(0);
 
-        let denoise_calls = Arc::new(AtomicUsize::new(0));
-        let sharpen_calls = Arc::new(AtomicUsize::new(0));
-
-        let denoise_calls_clone = denoise_calls.clone();
-        let sharpen_calls_clone = sharpen_calls.clone();
-
-        fn passthrough() -> DynamicImage {
-            DynamicImage::ImageRgb8(ImageBuffer::from_fn(1, 1, |_x, _y| Rgb([0, 0, 0])))
-        }
-
-        let pipelines = Pipelines {
-            denoise: Arc::new(move |img, _s| {
-                denoise_calls_clone.fetch_add(1, Ordering::SeqCst);
-                img
-            }),
-            denoise_experimental: Arc::new(|_img, _s| passthrough()),
-            sharpen: Arc::new(move |img, _s| {
-                sharpen_calls_clone.fetch_add(1, Ordering::SeqCst);
-                img
-            }),
-            sharpen_luma: Arc::new(|_img, _s| passthrough()),
-        };
-
-        let dir = temp_dir("denoise_std_calls");
-        let input = dir.join("input.png");
-        let output = dir.join("out.png");
-        write_test_image(&input);
+        let (input, output) = create_dir_and_input();
 
         let args = Args {
             input,
@@ -243,44 +224,26 @@ mod tests {
             experimental: false,
         };
 
-        run_with_pipelines(args, &pipelines).expect("run standard without sharpen");
-
-        assert_eq!(denoise_calls.load(Ordering::SeqCst), 1, "standard denoise should be called once");
-        assert_eq!(sharpen_calls.load(Ordering::SeqCst), 0, "sharpen should not be called");
+        run_with_pipelines(args, &mut pipelines).expect("run standard without sharpen");
     }
 
     #[test]
     fn run_invokes_standard_with_sharpen() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
+        let mut pipelines = MockPipelineFns::new();
+        pipelines
+            .expect_denoise()
+            .times(1)
+            .with(always(), eq(4))
+            .returning(|img, _| img);
+        pipelines
+            .expect_sharpen()
+            .times(1)
+            .with(always(), eq(2))
+            .returning(|img, _| img);
+        pipelines.expect_denoise_experimental().times(0);
+        pipelines.expect_sharpen_luma().times(0);
 
-        let denoise_calls = Arc::new(AtomicUsize::new(0));
-        let sharpen_calls = Arc::new(AtomicUsize::new(0));
-
-        let denoise_calls_clone = denoise_calls.clone();
-        let sharpen_calls_clone = sharpen_calls.clone();
-
-        fn passthrough() -> DynamicImage {
-            DynamicImage::ImageRgb8(ImageBuffer::from_fn(1, 1, |_x, _y| Rgb([0, 0, 0])))
-        }
-
-        let pipelines = Pipelines {
-            denoise: Arc::new(move |img, _s| {
-                denoise_calls_clone.fetch_add(1, Ordering::SeqCst);
-                img
-            }),
-            denoise_experimental: Arc::new(|_img, _s| passthrough()),
-            sharpen: Arc::new(move |img, _s| {
-                sharpen_calls_clone.fetch_add(1, Ordering::SeqCst);
-                img
-            }),
-            sharpen_luma: Arc::new(|_img, _s| passthrough()),
-        };
-
-        let dir = temp_dir("denoise_std_calls_sharpen");
-        let input = dir.join("input.png");
-        let output = dir.join("out.png");
-        write_test_image(&input);
+        let (input, output) = create_dir_and_input();
 
         let args = Args {
             input,
@@ -290,44 +253,23 @@ mod tests {
             experimental: false,
         };
 
-        run_with_pipelines(args, &pipelines).expect("run standard with sharpen");
-
-        assert_eq!(denoise_calls.load(Ordering::SeqCst), 1, "standard denoise should be called once");
-        assert_eq!(sharpen_calls.load(Ordering::SeqCst), 1, "sharpen should be called once");
+        run_with_pipelines(args, &mut pipelines).expect("run standard with sharpen");
     }
 
     #[test]
     fn run_invokes_experimental_without_sharpen() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
+        let mut pipelines = MockPipelineFns::new();
+        pipelines
+            .expect_denoise_experimental()
+            .times(1)
+            .with(always(), eq(3))
+            .returning(|img, _| img);
+        pipelines.expect_sharpen_luma().times(0);
+        pipelines.expect_denoise().times(0);
+        pipelines.expect_sharpen().times(0);
+        pipelines.expect_sharpen_luma().times(0);
 
-        let exp_calls = Arc::new(AtomicUsize::new(0));
-        let luma_calls = Arc::new(AtomicUsize::new(0));
-
-        let exp_calls_clone = exp_calls.clone();
-        let luma_calls_clone = luma_calls.clone();
-
-        fn passthrough() -> DynamicImage {
-            DynamicImage::ImageRgb8(ImageBuffer::from_fn(1, 1, |_x, _y| Rgb([0, 0, 0])))
-        }
-
-        let pipelines = Pipelines {
-            denoise: Arc::new(|_img, _s| passthrough()),
-            denoise_experimental: Arc::new(move |img, _s| {
-                exp_calls_clone.fetch_add(1, Ordering::SeqCst);
-                img
-            }),
-            sharpen: Arc::new(|_img, _s| passthrough()),
-            sharpen_luma: Arc::new(move |img, _s| {
-                luma_calls_clone.fetch_add(1, Ordering::SeqCst);
-                img
-            }),
-        };
-
-        let dir = temp_dir("denoise_exp_calls_no_sharp");
-        let input = dir.join("input.png");
-        let output = dir.join("out.png");
-        write_test_image(&input);
+        let (input, output) = create_dir_and_input();
 
         let args = Args {
             input,
@@ -337,9 +279,6 @@ mod tests {
             experimental: true,
         };
 
-        run_with_pipelines(args, &pipelines).expect("run experimental without sharpen");
-
-        assert_eq!(exp_calls.load(Ordering::SeqCst), 1, "experimental denoise should be called once");
-        assert_eq!(luma_calls.load(Ordering::SeqCst), 0, "luma sharpen should not be called");
+        run_with_pipelines(args, &mut pipelines).expect("run experimental without sharpen");
     }
 }
