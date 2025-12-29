@@ -3,7 +3,12 @@ use std::process;
 
 use clap::Parser;
 
-use denoise::{denoise_image, load_image, sharpen_image};
+use denoise::{
+    denoise_image,
+    denoise_image_experimental,
+    load_image,
+    sharpen_image,
+};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -35,6 +40,10 @@ struct Args {
         value_parser = clap::value_parser!(u8).range(1..=5)
     )]
     sharpen: Option<u8>,
+
+    /// Use the experimental astrophotography-focused denoiser
+    #[arg(long)]
+    experimental: bool,
 }
 
 fn main() {
@@ -48,10 +57,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let output_path =
         args.output
-            .unwrap_or_else(|| default_output_path(&args.input, args.strength, args.sharpen));
+            .unwrap_or_else(|| default_output_path(&args.input, args.strength, args.sharpen, args.experimental));
 
     let image = load_image(&args.input)?;
-    let denoised = denoise_image(image, args.strength);
+    let denoised = if args.experimental {
+        denoise_image_experimental(image, args.strength)
+    } else {
+        denoise_image(image, args.strength)
+    };
     let final_image = if let Some(sharpen_strength) = args.sharpen {
         sharpen_image(denoised, sharpen_strength)
     } else {
@@ -65,15 +78,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     Ok(())
 }
-fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>) -> PathBuf {
+fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>, experimental: bool) -> PathBuf {
     let parent = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("image");
 
+    let experimental_suffix = if experimental { "_experimental" } else { "" };
     let sharpen_suffix = sharpen.map(|s| format!("_sharpen-{s}")).unwrap_or_default();
     parent.join(format!(
-        "{stem}_denoised_strength-{strength}{sharpen_suffix}.png"
+        "{stem}_denoised_strength-{strength}{experimental_suffix}{sharpen_suffix}.png"
     ))
 }
