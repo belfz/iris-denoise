@@ -1,15 +1,17 @@
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::Arc;
 
 use clap::Parser;
+use image::DynamicImage;
 
 use denoise::{
     denoise_image,
     denoise_image_experimental,
+    filters::sharpen_image_luma,
     load_image,
     sharpen_image,
 };
-use denoise::filters::sharpen_image_luma;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -55,20 +57,48 @@ fn main() {
     }
 }
 
+type ImgFn = Arc<dyn Fn(DynamicImage, u8) -> DynamicImage + Send + Sync>;
+
+#[derive(Clone)]
+struct Pipelines {
+    denoise: ImgFn,
+    denoise_experimental: ImgFn,
+    sharpen: ImgFn,
+    sharpen_luma: ImgFn,
+}
+
+impl Default for Pipelines {
+    fn default() -> Self {
+        Self {
+            denoise: Arc::new(|img, s| denoise_image(img, s)),
+            denoise_experimental: Arc::new(|img, s| denoise_image_experimental(img, s)),
+            sharpen: Arc::new(|img, s| sharpen_image(img, s)),
+            sharpen_luma: Arc::new(|img, s| sharpen_image_luma(img, s)),
+        }
+    }
+}
+
 fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    run_with_pipelines(args, &Pipelines::default())
+}
+
+fn run_with_pipelines(
+    args: Args,
+    pipelines: &Pipelines,
+) -> Result<(), Box<dyn std::error::Error>> {
     let output_path =
         args.output
             .unwrap_or_else(|| default_output_path(&args.input, args.strength, args.sharpen, args.experimental));
 
     let image = load_image(&args.input)?;
     let denoised = if args.experimental {
-        denoise_image_experimental(image, args.strength)
+        (pipelines.denoise_experimental)(image, args.strength)
     } else {
-        denoise_image(image, args.strength)
+        (pipelines.denoise)(image, args.strength)
     };
     let final_image = match (args.sharpen, args.experimental) {
-        (Some(sharpen_strength), true) => sharpen_image_luma(denoised, sharpen_strength),
-        (Some(sharpen_strength), false) => sharpen_image(denoised, sharpen_strength),
+        (Some(sharpen_strength), true) => (pipelines.sharpen_luma)(denoised, sharpen_strength),
+        (Some(sharpen_strength), false) => (pipelines.sharpen)(denoised, sharpen_strength),
         _ => denoised,
     };
     final_image.save(&output_path)?;
@@ -97,7 +127,7 @@ fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>, experime
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{ImageBuffer, Rgb, RgbImage};
+    use image::{DynamicImage, ImageBuffer, Rgb, RgbImage};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -125,55 +155,191 @@ mod tests {
         img.save(path).expect("save test image");
     }
 
-    fn load_rgb(path: &Path) -> RgbImage {
-        image::open(path).expect("open image").to_rgb8()
-    }
-
     #[test]
-    fn run_standard_denoise_no_sharpen_matches_expected() {
-        let dir = temp_dir("denoise_std");
+    fn run_invokes_experimental_and_luma_sharpen_when_flagged() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let exp_calls = Arc::new(AtomicUsize::new(0));
+        let luma_calls = Arc::new(AtomicUsize::new(0));
+
+        let exp_calls_clone = exp_calls.clone();
+        let luma_calls_clone = luma_calls.clone();
+
+        fn passthrough() -> DynamicImage {
+            DynamicImage::ImageRgb8(ImageBuffer::from_fn(1, 1, |_x, _y| Rgb([0, 0, 0])))
+        }
+
+        let pipelines = Pipelines {
+            denoise: Arc::new(|_img, _s| passthrough()),
+            denoise_experimental: Arc::new(move |img, _s| {
+                exp_calls_clone.fetch_add(1, Ordering::SeqCst);
+                img
+            }),
+            sharpen: Arc::new(|_img, _s| passthrough()),
+            sharpen_luma: Arc::new(move |img, _s| {
+                luma_calls_clone.fetch_add(1, Ordering::SeqCst);
+                img
+            }),
+        };
+
+        let dir = temp_dir("denoise_exp_calls");
         let input = dir.join("input.png");
         let output = dir.join("out.png");
         write_test_image(&input);
 
         let args = Args {
-            input: input.clone(),
-            output: Some(output.clone()),
+            input,
+            output: Some(output),
             strength: 3,
+            sharpen: Some(2),
+            experimental: true,
+        };
+
+        run_with_pipelines(args, &pipelines).expect("run experimental with spies");
+
+        assert_eq!(exp_calls.load(Ordering::SeqCst), 1, "experimental denoise should be called once");
+        assert_eq!(luma_calls.load(Ordering::SeqCst), 1, "luma sharpen should be called once");
+    }
+
+    #[test]
+    fn run_invokes_standard_without_sharpen() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let denoise_calls = Arc::new(AtomicUsize::new(0));
+        let sharpen_calls = Arc::new(AtomicUsize::new(0));
+
+        let denoise_calls_clone = denoise_calls.clone();
+        let sharpen_calls_clone = sharpen_calls.clone();
+
+        fn passthrough() -> DynamicImage {
+            DynamicImage::ImageRgb8(ImageBuffer::from_fn(1, 1, |_x, _y| Rgb([0, 0, 0])))
+        }
+
+        let pipelines = Pipelines {
+            denoise: Arc::new(move |img, _s| {
+                denoise_calls_clone.fetch_add(1, Ordering::SeqCst);
+                img
+            }),
+            denoise_experimental: Arc::new(|_img, _s| passthrough()),
+            sharpen: Arc::new(move |img, _s| {
+                sharpen_calls_clone.fetch_add(1, Ordering::SeqCst);
+                img
+            }),
+            sharpen_luma: Arc::new(|_img, _s| passthrough()),
+        };
+
+        let dir = temp_dir("denoise_std_calls");
+        let input = dir.join("input.png");
+        let output = dir.join("out.png");
+        write_test_image(&input);
+
+        let args = Args {
+            input,
+            output: Some(output),
+            strength: 2,
             sharpen: None,
             experimental: false,
         };
 
-        run(args).expect("run standard");
+        run_with_pipelines(args, &pipelines).expect("run standard without sharpen");
 
-        let produced = load_rgb(&output);
-        let expected = denoise_image(load_image(&input).unwrap(), 3).to_rgb8();
-        assert_eq!(produced.as_raw(), expected.as_raw());
+        assert_eq!(denoise_calls.load(Ordering::SeqCst), 1, "standard denoise should be called once");
+        assert_eq!(sharpen_calls.load(Ordering::SeqCst), 0, "sharpen should not be called");
     }
 
     #[test]
-    fn run_experimental_with_luma_sharpen_matches_expected() {
-        let dir = temp_dir("denoise_exp");
+    fn run_invokes_standard_with_sharpen() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let denoise_calls = Arc::new(AtomicUsize::new(0));
+        let sharpen_calls = Arc::new(AtomicUsize::new(0));
+
+        let denoise_calls_clone = denoise_calls.clone();
+        let sharpen_calls_clone = sharpen_calls.clone();
+
+        fn passthrough() -> DynamicImage {
+            DynamicImage::ImageRgb8(ImageBuffer::from_fn(1, 1, |_x, _y| Rgb([0, 0, 0])))
+        }
+
+        let pipelines = Pipelines {
+            denoise: Arc::new(move |img, _s| {
+                denoise_calls_clone.fetch_add(1, Ordering::SeqCst);
+                img
+            }),
+            denoise_experimental: Arc::new(|_img, _s| passthrough()),
+            sharpen: Arc::new(move |img, _s| {
+                sharpen_calls_clone.fetch_add(1, Ordering::SeqCst);
+                img
+            }),
+            sharpen_luma: Arc::new(|_img, _s| passthrough()),
+        };
+
+        let dir = temp_dir("denoise_std_calls_sharpen");
         let input = dir.join("input.png");
         let output = dir.join("out.png");
         write_test_image(&input);
 
         let args = Args {
-            input: input.clone(),
-            output: Some(output.clone()),
+            input,
+            output: Some(output),
+            strength: 4,
+            sharpen: Some(2),
+            experimental: false,
+        };
+
+        run_with_pipelines(args, &pipelines).expect("run standard with sharpen");
+
+        assert_eq!(denoise_calls.load(Ordering::SeqCst), 1, "standard denoise should be called once");
+        assert_eq!(sharpen_calls.load(Ordering::SeqCst), 1, "sharpen should be called once");
+    }
+
+    #[test]
+    fn run_invokes_experimental_without_sharpen() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let exp_calls = Arc::new(AtomicUsize::new(0));
+        let luma_calls = Arc::new(AtomicUsize::new(0));
+
+        let exp_calls_clone = exp_calls.clone();
+        let luma_calls_clone = luma_calls.clone();
+
+        fn passthrough() -> DynamicImage {
+            DynamicImage::ImageRgb8(ImageBuffer::from_fn(1, 1, |_x, _y| Rgb([0, 0, 0])))
+        }
+
+        let pipelines = Pipelines {
+            denoise: Arc::new(|_img, _s| passthrough()),
+            denoise_experimental: Arc::new(move |img, _s| {
+                exp_calls_clone.fetch_add(1, Ordering::SeqCst);
+                img
+            }),
+            sharpen: Arc::new(|_img, _s| passthrough()),
+            sharpen_luma: Arc::new(move |img, _s| {
+                luma_calls_clone.fetch_add(1, Ordering::SeqCst);
+                img
+            }),
+        };
+
+        let dir = temp_dir("denoise_exp_calls_no_sharp");
+        let input = dir.join("input.png");
+        let output = dir.join("out.png");
+        write_test_image(&input);
+
+        let args = Args {
+            input,
+            output: Some(output),
             strength: 3,
-            sharpen: Some(3),
+            sharpen: None,
             experimental: true,
         };
 
-        run(args).expect("run experimental");
+        run_with_pipelines(args, &pipelines).expect("run experimental without sharpen");
 
-        let produced = load_rgb(&output);
-        let expected = sharpen_image_luma(
-            denoise_image_experimental(load_image(&input).unwrap(), 3),
-            3,
-        )
-        .to_rgb8();
-        assert_eq!(produced.as_raw(), expected.as_raw());
+        assert_eq!(exp_calls.load(Ordering::SeqCst), 1, "experimental denoise should be called once");
+        assert_eq!(luma_calls.load(Ordering::SeqCst), 0, "luma sharpen should not be called");
     }
 }
