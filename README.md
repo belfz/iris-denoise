@@ -1,4 +1,4 @@
-# denoise
+# iris-denoise
 
 Rust CLI to denoise astrophotography frames (TIFF, PNG, JPEG) using a median filter plus a light Gaussian blur. Includes a gentle strength curve and parallelized median filtering via Rayon.
 
@@ -14,7 +14,7 @@ Rust CLI to denoise astrophotography frames (TIFF, PNG, JPEG) using a median fil
 cargo run --release -- <input.png> [output.png] [--strength 1-5]
 
 # or after building:
-./target/release/denoise -h
+./target/release/iris-denoise -h
 ```
 
 ## Notes

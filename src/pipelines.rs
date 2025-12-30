@@ -1,8 +1,12 @@
 use image::DynamicImage;
 
-use denoise::{
-    denoise_image, denoise_image_experimental, denoise_image_tiff, filters::sharpen_image_luma,
-    sharpen_image, sharpen_image_tiff,
+use iris_denoise::{
+    denoise_image,
+    denoise_image_experimental,
+    denoise_image_tiff,
+    filters::sharpen_image_luma,
+    sharpen_image,
+    sharpen_image_tiff,
 };
 
 #[cfg_attr(test, mockall::automock)]
