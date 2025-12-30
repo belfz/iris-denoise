@@ -1,46 +1,69 @@
 use std::path::{Path, PathBuf};
 
-use denoise::load_image;
+use image::ImageFormat;
 
 use crate::cli::Args;
-use crate::pipelines::{PipelineFns, RealPipelines};
+use crate::img_io::{ImageSourceFormat, LoadedImage, load_image_with_meta, save_image_with_format};
+use crate::pipelines::{PipelineFns, StandardImagePipelines, TiffPipelines};
 
 pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-    let mut pipelines = RealPipelines;
-    run_with_pipelines(args, &mut pipelines)
+    let loaded = load_image_with_meta(&args.input)?;
+
+    match loaded.format {
+        ImageSourceFormat::Tiff { .. } => run_with_pipelines(args, &TiffPipelines, loaded),
+        ImageSourceFormat::StandardImage(_) => run_with_pipelines(args, &StandardImagePipelines, loaded),
+    }
+}
+
+fn print_loaded_details(loaded: &LoadedImage, output_path: &Path) {
+    println!("Loaded format: {}", match loaded.format {
+        ImageSourceFormat::Tiff { bit_depth } => format!("TIFF: {:?}", bit_depth),
+        ImageSourceFormat::StandardImage(_) => format!("PNG"),
+    });
+    println!("Output path: {}", output_path.display());
 }
 
 fn run_with_pipelines(
     args: Args,
     pipelines: &dyn PipelineFns,
+    loaded: LoadedImage,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let output_path =
-        args.output
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| default_output_path(&args.input, args.strength, args.sharpen, args.experimental));
-
-    let image = load_image(&args.input)?;
-    let denoised = if args.experimental {
-        pipelines.denoise_experimental(image, args.strength)
-    } else {
-        pipelines.denoise(image, args.strength)
-    };
-    let final_image = match (args.sharpen, args.experimental) {
-        (Some(sharpen_strength), true) => pipelines.sharpen_luma(denoised, sharpen_strength),
-        (Some(sharpen_strength), false) => pipelines.sharpen(denoised, sharpen_strength),
-        _ => denoised,
-    };
-    final_image.save(&output_path)?;
-
-    println!(
-        "Processed image written to {}",
-        output_path.display()
+    let output_path = choose_output_path(
+        &args.input,
+        args.output.as_ref(),
+        args.strength,
+        args.sharpen,
+        args.experimental,
+        &loaded.format,
     );
+
+    print_loaded_details(&loaded, &output_path);
+
+    let final_image = {
+        let denoised = if args.experimental {
+            pipelines.denoise_experimental(loaded.image, args.strength)
+        } else {
+            pipelines.denoise(loaded.image, args.strength)
+        };
+        match (args.sharpen, args.experimental) {
+            (Some(sharpen_strength), true) => pipelines.sharpen_luma(denoised, sharpen_strength),
+            (Some(sharpen_strength), false) => pipelines.sharpen(denoised, sharpen_strength),
+            _ => denoised,
+        }
+    };
+
+    save_image_with_format(&output_path, &final_image, &loaded.format)?;
+
+    println!("Processed image written to {}", output_path.display());
     Ok(())
 }
 
-fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>, experimental: bool) -> PathBuf {
+fn default_output_path(
+    input: &Path,
+    strength: u8,
+    sharpen: Option<u8>,
+    experimental: bool,
+) -> PathBuf {
     let parent = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
         .file_stem()
@@ -52,6 +75,29 @@ fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>, experime
     parent.join(format!(
         "{stem}_denoised_strength-{strength}{experimental_suffix}{sharpen_suffix}.png"
     ))
+}
+
+fn choose_output_path(
+    input: &Path,
+    user_output: Option<&PathBuf>,
+    strength: u8,
+    sharpen: Option<u8>,
+    experimental: bool,
+    format: &ImageSourceFormat,
+) -> PathBuf {
+    let mut base = user_output
+        .cloned()
+        .unwrap_or_else(|| default_output_path(input, strength, sharpen, experimental));
+
+    let is_tiff = match format {
+        ImageSourceFormat::Tiff { .. } => true,
+        ImageSourceFormat::StandardImage(fmt) => *fmt == ImageFormat::Tiff,
+    };
+    if is_tiff {
+        base.set_extension("tiff");
+    }
+
+    base
 }
 
 #[cfg(test)]
@@ -76,7 +122,7 @@ mod tests {
         img.save(path).expect("save test image");
     }
 
-    fn create_dir_and_input() -> (PathBuf, PathBuf) {
+    fn create_dir_and_input() -> (PathBuf, PathBuf, LoadedImage) {
         let mut dir = std::env::temp_dir();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -88,7 +134,9 @@ mod tests {
         let input = dir.join("input.png");
         let output = dir.join("out.png");
         write_test_image(&input);
-        (input, output)
+        let loaded = load_image_with_meta(&input).expect("load test image");
+
+        (input, output, loaded)
     }
 
     #[test]
@@ -107,7 +155,7 @@ mod tests {
         pipelines.expect_denoise().times(0);
         pipelines.expect_sharpen().times(0);
 
-        let (input, output) = create_dir_and_input();
+        let (input, output, loaded) = create_dir_and_input();
 
         let args = Args {
             input,
@@ -117,7 +165,7 @@ mod tests {
             experimental: true,
         };
 
-        run_with_pipelines(args, &pipelines).expect("run experimental with sharpen");
+        run_with_pipelines(args, &pipelines, loaded).expect("run experimental with sharpen");
     }
 
     #[test]
@@ -132,7 +180,7 @@ mod tests {
         pipelines.expect_denoise_experimental().times(0);
         pipelines.expect_sharpen_luma().times(0);
 
-        let (input, output) = create_dir_and_input();
+        let (input, output, loaded) = create_dir_and_input();
 
         let args = Args {
             input,
@@ -142,7 +190,7 @@ mod tests {
             experimental: false,
         };
 
-        run_with_pipelines(args, &pipelines).expect("run standard without sharpen");
+        run_with_pipelines(args, &pipelines, loaded).expect("run standard without sharpen");
     }
 
     #[test]
@@ -161,7 +209,7 @@ mod tests {
         pipelines.expect_denoise_experimental().times(0);
         pipelines.expect_sharpen_luma().times(0);
 
-        let (input, output) = create_dir_and_input();
+        let (input, output, loaded) = create_dir_and_input();
 
         let args = Args {
             input,
@@ -171,7 +219,7 @@ mod tests {
             experimental: false,
         };
 
-        run_with_pipelines(args, &pipelines).expect("run standard with sharpen");
+        run_with_pipelines(args, &pipelines, loaded).expect("run standard with sharpen");
     }
 
     #[test]
@@ -187,7 +235,7 @@ mod tests {
         pipelines.expect_sharpen().times(0);
         pipelines.expect_sharpen_luma().times(0);
 
-        let (input, output) = create_dir_and_input();
+        let (input, output, loaded) = create_dir_and_input();
 
         let args = Args {
             input,
@@ -197,7 +245,6 @@ mod tests {
             experimental: true,
         };
 
-        run_with_pipelines(args, &pipelines).expect("run experimental without sharpen");
+        run_with_pipelines(args, &pipelines, loaded).expect("run experimental without sharpen");
     }
 }
-

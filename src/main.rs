@@ -1,4 +1,5 @@
 mod cli;
+mod img_io;
 mod pipelines;
 mod run;
 

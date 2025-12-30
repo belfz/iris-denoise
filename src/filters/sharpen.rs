@@ -91,4 +91,3 @@ pub fn sharpen_image_luma(image: DynamicImage, strength: u8) -> DynamicImage {
 
     DynamicImage::ImageRgb8(out)
 }
-

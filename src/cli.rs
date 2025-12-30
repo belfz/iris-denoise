@@ -37,4 +37,3 @@ pub struct Args {
     #[arg(long)]
     pub experimental: bool,
 }
-

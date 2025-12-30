@@ -17,14 +17,23 @@ pub fn denoise_image_experimental(image: DynamicImage, strength: u8) -> DynamicI
     // sigma_chroma: strong chroma smoothing (applied twice with blend).
     // fine_thresh/coarse_thresh: soft-thresholds for detail suppression.
     // gains: asymmetric to favor positive (star) detail over negative (noise).
-    let (sigma_fine, sigma_base, sigma_chroma, fine_thresh, coarse_thresh, fine_gain_pos, fine_gain_neg, coarse_gain, base_blend) =
-        match strength {
-            1 => (0.9, 1.8, 2.4, 2.2, 1.1, 0.85, 0.25, 0.80, 0.78),
-            2 => (1.05, 2.1, 2.7, 2.7, 1.3, 0.90, 0.26, 0.82, 0.78),
-            3 => (1.20, 2.4, 3.1, 3.2, 1.5, 0.95, 0.28, 0.85, 0.79),
-            4 => (1.35, 2.7, 3.4, 3.8, 1.8, 1.00, 0.30, 0.88, 0.80),
-            _ => (1.50, 3.0, 3.8, 4.4, 2.0, 1.05, 0.32, 0.90, 0.80),
-        };
+    let (
+        sigma_fine,
+        sigma_base,
+        sigma_chroma,
+        fine_thresh,
+        coarse_thresh,
+        fine_gain_pos,
+        fine_gain_neg,
+        coarse_gain,
+        base_blend,
+    ) = match strength {
+        1 => (0.9, 1.8, 2.4, 2.2, 1.1, 0.85, 0.25, 0.80, 0.78),
+        2 => (1.05, 2.1, 2.7, 2.7, 1.3, 0.90, 0.26, 0.82, 0.78),
+        3 => (1.20, 2.4, 3.1, 3.2, 1.5, 0.95, 0.28, 0.85, 0.79),
+        4 => (1.35, 2.7, 3.4, 3.8, 1.8, 1.00, 0.30, 0.88, 0.80),
+        _ => (1.50, 3.0, 3.8, 4.4, 2.0, 1.05, 0.32, 0.90, 0.80),
+    };
 
     // Build Y, Cb, Cr planes as f32.
     let mut y_plane: ImageBuffer<Luma<f32>, Vec<f32>> = ImageBuffer::new(w, h);
@@ -105,7 +114,11 @@ fn soft_shrink(v: f32, thresh: f32) -> f32 {
     }
 }
 
-fn blend_planes(a: &ImageBuffer<Luma<f32>, Vec<f32>>, b: &ImageBuffer<Luma<f32>, Vec<f32>>, alpha: f32) -> ImageBuffer<Luma<f32>, Vec<f32>> {
+fn blend_planes(
+    a: &ImageBuffer<Luma<f32>, Vec<f32>>,
+    b: &ImageBuffer<Luma<f32>, Vec<f32>>,
+    alpha: f32,
+) -> ImageBuffer<Luma<f32>, Vec<f32>> {
     let mut out = ImageBuffer::new(a.width(), a.height());
     for (x, y, pix) in out.enumerate_pixels_mut() {
         let va = a.get_pixel(x, y)[0];
@@ -114,4 +127,3 @@ fn blend_planes(a: &ImageBuffer<Luma<f32>, Vec<f32>>, b: &ImageBuffer<Luma<f32>,
     }
     out
 }
-
