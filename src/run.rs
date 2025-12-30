@@ -12,7 +12,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn run_with_pipelines(
     args: Args,
-    pipelines: &mut dyn PipelineFns,
+    pipelines: &dyn PipelineFns,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let output_path =
         args.output
