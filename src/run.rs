@@ -117,7 +117,7 @@ mod tests {
             experimental: true,
         };
 
-        run_with_pipelines(args, &mut pipelines).expect("run experimental with spies");
+        run_with_pipelines(args, &mut pipelines).expect("run experimental with sharpen");
     }
 
     #[test]
