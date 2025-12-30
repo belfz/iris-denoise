@@ -1,6 +1,6 @@
 # denoise
 
-Rust CLI to denoise PNG astrophotography frames using a median filter plus a light Gaussian blur. Includes a gentle strength curve and parallelized median filtering via Rayon.
+Rust CLI to denoise astrophotography frames (TIFF, PNG, JPEG) using a median filter plus a light Gaussian blur. Includes a gentle strength curve and parallelized median filtering via Rayon.
 
 ## Requirements
 - Rust toolchain (stable recommended)
@@ -12,14 +12,10 @@ Rust CLI to denoise PNG astrophotography frames using a median filter plus a lig
 ## Run
 ```
 cargo run --release -- <input.png> [output.png] [--strength 1-5]
-# or after building:
-./target/release/denoise <input.png> [output.png] [--strength 1-5]
-```
 
-Arguments:
-- `input.png` – source image.
-- `output.png` – optional; defaults to `<stem>_denoised.png`.
-- `--strength` / `-s` – integer 1 (very mild) to 5 (stronger). Defaults to 3.
+# or after building:
+./target/release/denoise -h
+```
 
 ## Notes
 - Median is parallelized; Rayon uses all cores by default. Limit threads via `RAYON_NUM_THREADS=4 ./target/release/denoise ...` if desired.
