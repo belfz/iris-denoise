@@ -10,7 +10,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     run_with_pipelines(args, &mut pipelines)
 }
 
-pub fn run_with_pipelines(
+fn run_with_pipelines(
     args: Args,
     pipelines: &dyn PipelineFns,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -117,7 +117,7 @@ mod tests {
             experimental: true,
         };
 
-        run_with_pipelines(args, &mut pipelines).expect("run experimental with sharpen");
+        run_with_pipelines(args, &pipelines).expect("run experimental with sharpen");
     }
 
     #[test]
@@ -142,7 +142,7 @@ mod tests {
             experimental: false,
         };
 
-        run_with_pipelines(args, &mut pipelines).expect("run standard without sharpen");
+        run_with_pipelines(args, &pipelines).expect("run standard without sharpen");
     }
 
     #[test]
@@ -171,7 +171,7 @@ mod tests {
             experimental: false,
         };
 
-        run_with_pipelines(args, &mut pipelines).expect("run standard with sharpen");
+        run_with_pipelines(args, &pipelines).expect("run standard with sharpen");
     }
 
     #[test]
@@ -197,7 +197,7 @@ mod tests {
             experimental: true,
         };
 
-        run_with_pipelines(args, &mut pipelines).expect("run experimental without sharpen");
+        run_with_pipelines(args, &pipelines).expect("run experimental without sharpen");
     }
 }
 
