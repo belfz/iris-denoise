@@ -9,6 +9,7 @@ image = "0.25"
 imageproc = "0.25"
 rayon = "1"
 mockall = { version = "0.12", optional = true }
+image-dwt = "0.3.2"
 
 [dev-dependencies]
 mockall = "0.12"

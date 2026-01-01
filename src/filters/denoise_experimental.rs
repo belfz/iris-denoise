@@ -1,5 +1,22 @@
 use image::{DynamicImage, ImageBuffer, Luma, Rgb};
 use imageproc::filter::gaussian_blur_f32;
+use image_dwt::{kernels::B3SplineKernel, recompose::{OutputLayer, RecomposableWaveletLayers}, transform::ATrousTransform};
+
+pub fn denoise_image_experimental_with_a_trous(image: DynamicImage) -> DynamicImage {
+    let a_trous = ATrousTransform::new(&image, 6, B3SplineKernel);
+    println!("a trous!");
+    let a_trous_transformed = a_trous
+        .into_iter()
+        .map(|layer| {
+            let x = layer.pixel_scale;
+            if let Some(x) = x {
+                println!("pixel_scale: {:?}", x);
+            };
+            layer
+        })
+        .recompose_into_image(image.width() as usize, image.height() as usize, OutputLayer::Rgb);
+    a_trous_transformed
+}
 
 /// Experimental astrophotography-oriented denoiser (multi-scale, chroma-heavy).
 ///

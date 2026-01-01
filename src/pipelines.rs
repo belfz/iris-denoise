@@ -2,9 +2,9 @@ use image::DynamicImage;
 
 use iris_denoise::{
     denoise_image,
-    denoise_image_experimental,
+    // denoise_image_experimental,
     denoise_image_tiff,
-    filters::sharpen_image_luma,
+    filters::{denoise_image_experimental_with_a_trous, sharpen_image_luma},
     sharpen_image,
     sharpen_image_tiff,
 };
@@ -28,7 +28,8 @@ impl PipelineFns for StandardImagePipelines {
 
     fn denoise_experimental(&self, img: DynamicImage, strength: u8) -> DynamicImage {
         println!("Standard image pipelines: denoise_experimental");
-        denoise_image_experimental(img, strength)
+        denoise_image_experimental_with_a_trous(img)
+        // denoise_image_experimental(img, strength)
     }
 
     fn sharpen(&self, img: DynamicImage, strength: u8) -> DynamicImage {
@@ -49,9 +50,10 @@ impl PipelineFns for TiffPipelines {
     }
 
     fn denoise_experimental(&self, img: DynamicImage, strength: u8) -> DynamicImage {
-        // For TIFF, reuse the TIFF path for experimental until a dedicated one exists.
+        // For TIFF, reuse the standard path for experimental until a dedicated one exists.
         println!("TIFF pipelines: denoise_experimental");
-        denoise_image_tiff(img, strength)
+        denoise_image_experimental_with_a_trous(img)
+        // denoise_image_tiff(img, strength)
     }
 
     fn sharpen(&self, img: DynamicImage, strength: u8) -> DynamicImage {

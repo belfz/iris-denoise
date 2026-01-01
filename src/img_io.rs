@@ -64,7 +64,7 @@ pub fn save_image_with_format(
 ) -> Result<(), Box<dyn Error>> {
     match format {
         ImageSourceFormat::StandardImage(fmt) => {
-            image.save_with_format(path, *fmt)?;
+            image.to_rgb8().save_with_format(path, *fmt)?;
             Ok(())
         }
         ImageSourceFormat::Tiff { bit_depth } => {
