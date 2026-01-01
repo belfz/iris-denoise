@@ -26,7 +26,7 @@ impl PipelineFns for StandardImagePipelines {
         denoise_image(img, strength)
     }
 
-    fn denoise_experimental(&self, img: DynamicImage, strength: u8) -> DynamicImage {
+    fn denoise_experimental(&self, img: DynamicImage, _strength: u8) -> DynamicImage {
         println!("Standard image pipelines: denoise_experimental");
         denoise_image_experimental_with_a_trous(img)
         // denoise_image_experimental(img, strength)
@@ -49,7 +49,7 @@ impl PipelineFns for TiffPipelines {
         denoise_image_tiff(img, strength)
     }
 
-    fn denoise_experimental(&self, img: DynamicImage, strength: u8) -> DynamicImage {
+    fn denoise_experimental(&self, img: DynamicImage, _strength: u8) -> DynamicImage {
         // For TIFF, reuse the standard path for experimental until a dedicated one exists.
         println!("TIFF pipelines: denoise_experimental");
         denoise_image_experimental_with_a_trous(img)
