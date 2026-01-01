@@ -11,15 +11,20 @@ pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     match loaded.format {
         ImageSourceFormat::Tiff { .. } => run_with_pipelines(args, &TiffPipelines, loaded),
-        ImageSourceFormat::StandardImage(_) => run_with_pipelines(args, &StandardImagePipelines, loaded),
+        ImageSourceFormat::StandardImage(_) => {
+            run_with_pipelines(args, &StandardImagePipelines, loaded)
+        }
     }
 }
 
 fn print_loaded_details(loaded: &LoadedImage, output_path: &Path) {
-    println!("Loaded format: {}", match loaded.format {
-        ImageSourceFormat::Tiff { bit_depth } => format!("TIFF: {:?}", bit_depth),
-        ImageSourceFormat::StandardImage(_) => format!("PNG"),
-    });
+    println!(
+        "Loaded format: {}",
+        match loaded.format {
+            ImageSourceFormat::Tiff { bit_depth } => format!("TIFF: {:?}", bit_depth),
+            ImageSourceFormat::StandardImage(_) => format!("PNG"),
+        }
+    );
     println!("Output path: {}", output_path.display());
 }
 

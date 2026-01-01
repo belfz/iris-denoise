@@ -33,7 +33,10 @@ pub fn load_image_with_meta(path: &Path) -> Result<LoadedImage, Box<dyn Error>> 
         }
     };
 
-    let format = reader.format().ok_or(format!("Failed to get image format from {}", path.display()))?;
+    let format = reader.format().ok_or(format!(
+        "Failed to get image format from {}",
+        path.display()
+    ))?;
     let image = reader.decode()?;
 
     if format == ImageFormat::Tiff {
