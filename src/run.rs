@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use image::ImageFormat;
 
-use crate::cli::Args;
+use crate::cli::{Args, Model};
 use crate::img_io::{ImageSourceFormat, LoadedImage, load_image_with_meta, save_image_with_format};
 use crate::pipelines::{PipelineFns, StandardImagePipelines, TiffPipelines};
 
@@ -38,21 +38,23 @@ fn run_with_pipelines(
         args.output.as_ref(),
         args.strength,
         args.sharpen,
-        args.experimental,
+        args.model,
         &loaded.format,
     );
 
     print_loaded_details(&loaded, &output_path);
 
     let final_image = {
-        let denoised = if args.experimental {
-            pipelines.denoise_experimental(loaded.image, args.strength)
-        } else {
-            pipelines.denoise(loaded.image, args.strength)
+        let denoised = match args.model {
+            Model::Experimental => pipelines.denoise_experimental(loaded.image, args.strength),
+            Model::ATrous => pipelines.denoise_a_trous(loaded.image),
+            Model::Default => pipelines.denoise(loaded.image, args.strength),
         };
-        match (args.sharpen, args.experimental) {
-            (Some(sharpen_strength), true) => pipelines.sharpen_luma(denoised, sharpen_strength),
-            (Some(sharpen_strength), false) => pipelines.sharpen(denoised, sharpen_strength),
+        match (args.sharpen, args.model) {
+            (Some(sharpen_strength), Model::Experimental) => {
+                pipelines.sharpen_luma(denoised, sharpen_strength)
+            }
+            (Some(sharpen_strength), _) => pipelines.sharpen(denoised, sharpen_strength),
             _ => denoised,
         }
     };
@@ -63,22 +65,17 @@ fn run_with_pipelines(
     Ok(())
 }
 
-fn default_output_path(
-    input: &Path,
-    strength: u8,
-    sharpen: Option<u8>,
-    experimental: bool,
-) -> PathBuf {
+fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>, model: Model) -> PathBuf {
     let parent = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("image");
 
-    let experimental_suffix = if experimental { "_experimental" } else { "" };
+    let suffix = format!("_{:?}", model);
     let sharpen_suffix = sharpen.map(|s| format!("_sharpen-{s}")).unwrap_or_default();
     parent.join(format!(
-        "{stem}_denoised_strength-{strength}{experimental_suffix}{sharpen_suffix}.png"
+        "{stem}_denoised_strength-{strength}{suffix}{sharpen_suffix}.png"
     ))
 }
 
@@ -87,12 +84,12 @@ fn choose_output_path(
     user_output: Option<&PathBuf>,
     strength: u8,
     sharpen: Option<u8>,
-    experimental: bool,
+    model: Model,
     format: &ImageSourceFormat,
 ) -> PathBuf {
     let mut base = user_output
         .cloned()
-        .unwrap_or_else(|| default_output_path(input, strength, sharpen, experimental));
+        .unwrap_or_else(|| default_output_path(input, strength, sharpen, model));
 
     let is_tiff = match format {
         ImageSourceFormat::Tiff { .. } => true,
@@ -167,7 +164,7 @@ mod tests {
             output: Some(output),
             strength: 3,
             sharpen: Some(2),
-            experimental: true,
+            model: Model::Experimental,
         };
 
         run_with_pipelines(args, &pipelines, loaded).expect("run experimental with sharpen");
@@ -192,7 +189,7 @@ mod tests {
             output: Some(output),
             strength: 2,
             sharpen: None,
-            experimental: false,
+            model: Model::Default,
         };
 
         run_with_pipelines(args, &pipelines, loaded).expect("run standard without sharpen");
@@ -221,7 +218,7 @@ mod tests {
             output: Some(output),
             strength: 4,
             sharpen: Some(2),
-            experimental: false,
+            model: Model::Default,
         };
 
         run_with_pipelines(args, &pipelines, loaded).expect("run standard with sharpen");
@@ -247,7 +244,7 @@ mod tests {
             output: Some(output),
             strength: 3,
             sharpen: None,
-            experimental: true,
+            model: Model::Experimental,
         };
 
         run_with_pipelines(args, &pipelines, loaded).expect("run experimental without sharpen");

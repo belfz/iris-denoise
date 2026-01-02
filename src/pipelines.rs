@@ -1,18 +1,15 @@
 use image::DynamicImage;
 
 use iris_denoise::{
-    denoise_image,
-    // denoise_image_experimental,
-    denoise_image_tiff,
-    filters::{denoise_image_experimental_with_a_trous, sharpen_image_luma},
-    sharpen_image,
-    sharpen_image_tiff,
+    denoise_a_trous, denoise_image, denoise_image_experimental, denoise_image_tiff,
+    filters::sharpen_image_luma, sharpen_image, sharpen_image_tiff,
 };
 
 #[cfg_attr(test, mockall::automock)]
 pub trait PipelineFns {
     fn denoise(&self, img: DynamicImage, strength: u8) -> DynamicImage;
     fn denoise_experimental(&self, img: DynamicImage, strength: u8) -> DynamicImage;
+    fn denoise_a_trous(&self, img: DynamicImage) -> DynamicImage;
     fn sharpen(&self, img: DynamicImage, strength: u8) -> DynamicImage;
     fn sharpen_luma(&self, img: DynamicImage, strength: u8) -> DynamicImage;
 }
@@ -26,10 +23,14 @@ impl PipelineFns for StandardImagePipelines {
         denoise_image(img, strength)
     }
 
-    fn denoise_experimental(&self, img: DynamicImage, _strength: u8) -> DynamicImage {
+    fn denoise_experimental(&self, img: DynamicImage, strength: u8) -> DynamicImage {
         println!("Standard image pipelines: denoise_experimental");
-        denoise_image_experimental_with_a_trous(img)
-        // denoise_image_experimental(img, strength)
+        denoise_image_experimental(img, strength)
+    }
+
+    fn denoise_a_trous(&self, img: DynamicImage) -> DynamicImage {
+        println!("Standard image pipelines: denoise_a_trous");
+        denoise_a_trous(img)
     }
 
     fn sharpen(&self, img: DynamicImage, strength: u8) -> DynamicImage {
@@ -49,11 +50,15 @@ impl PipelineFns for TiffPipelines {
         denoise_image_tiff(img, strength)
     }
 
-    fn denoise_experimental(&self, img: DynamicImage, _strength: u8) -> DynamicImage {
+    fn denoise_experimental(&self, img: DynamicImage, strength: u8) -> DynamicImage {
         // For TIFF, reuse the standard path for experimental until a dedicated one exists.
         println!("TIFF pipelines: denoise_experimental");
-        denoise_image_experimental_with_a_trous(img)
-        // denoise_image_tiff(img, strength)
+        denoise_image_tiff(img, strength)
+    }
+
+    fn denoise_a_trous(&self, img: DynamicImage) -> DynamicImage {
+        println!("TIFF pipelines: denoise_a_trous");
+        denoise_a_trous(img)
     }
 
     fn sharpen(&self, img: DynamicImage, strength: u8) -> DynamicImage {
