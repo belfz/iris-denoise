@@ -1,6 +1,13 @@
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+
+#[derive(ValueEnum, Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Model {
+    Default,
+    Experimental,
+    ATrous,
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -13,7 +20,7 @@ pub struct Args {
     #[arg(short, long, value_name = "OUTPUT")]
     pub output: Option<PathBuf>,
 
-    /// Denoise strength 1-5 (mild to strong)
+    /// Denoise strength 1-5 (mild to strong). Only applies to Default and Experimental models. If not specified, the default strength is 3.
     #[arg(
         short,
         long,
@@ -33,7 +40,7 @@ pub struct Args {
     )]
     pub sharpen: Option<u8>,
 
-    /// Use the experimental astrophotography-focused denoiser
-    #[arg(long)]
-    pub experimental: bool,
+    /// Model to use for denoising. Choose between Default, Experimental, and ATrous.
+    #[arg(short, long, value_parser = clap::value_parser!(Model))]
+    pub model: Model,
 }

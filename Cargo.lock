@@ -527,6 +527,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "image-dwt"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be681f2782bc5b87513550dc244c4c3541f09615fb02298a6832da9401d1bf93"
+dependencies = [
+ "image",
+ "ndarray",
+]
+
+[[package]]
 name = "image-webp"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -577,6 +587,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "image",
+ "image-dwt",
  "imageproc",
  "mockall",
  "rayon",
@@ -761,6 +772,20 @@ dependencies = [
  "num-traits",
  "simba",
  "typenum",
+]
+
+[[package]]
+name = "ndarray"
+version = "0.15.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb12d4e967ec485a5f71c6311fe28158e9d6f4bc4a447b474184d0f91a8fa32"
+dependencies = [
+ "matrixmultiply",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "rawpointer",
+ "rayon",
 ]
 
 [[package]]
