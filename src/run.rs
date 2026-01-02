@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use image::ImageFormat;
 
-use crate::cli::{Args, Model};
+use crate::cli::{Args, Strategy};
 use crate::img_io::{ImageSourceFormat, LoadedImage, load_image_with_meta, save_image_with_format};
 use crate::pipelines::{PipelineFns, StandardImagePipelines, TiffPipelines};
 
@@ -38,20 +38,20 @@ fn run_with_pipelines(
         args.output.as_ref(),
         args.strength,
         args.sharpen,
-        args.model,
+        args.strategy,
         &loaded.format,
     );
 
     print_loaded_details(&loaded, &output_path);
 
     let final_image = {
-        let denoised = match args.model {
-            Model::Experimental => pipelines.denoise_experimental(loaded.image, args.strength),
-            Model::ATrous => pipelines.denoise_a_trous(loaded.image),
-            Model::Default => pipelines.denoise(loaded.image, args.strength),
+        let denoised = match args.strategy {
+            Strategy::Experimental => pipelines.denoise_experimental(loaded.image, args.strength),
+            Strategy::ATrous => pipelines.denoise_a_trous(loaded.image),
+            Strategy::Default => pipelines.denoise(loaded.image, args.strength),
         };
-        match (args.sharpen, args.model) {
-            (Some(sharpen_strength), Model::Experimental) => {
+        match (args.sharpen, args.strategy) {
+            (Some(sharpen_strength), Strategy::Experimental) => {
                 pipelines.sharpen_luma(denoised, sharpen_strength)
             }
             (Some(sharpen_strength), _) => pipelines.sharpen(denoised, sharpen_strength),
@@ -65,14 +65,14 @@ fn run_with_pipelines(
     Ok(())
 }
 
-fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>, model: Model) -> PathBuf {
+fn default_output_path(input: &Path, strength: u8, sharpen: Option<u8>, strategy: Strategy) -> PathBuf {
     let parent = input.parent().unwrap_or_else(|| Path::new("."));
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("image");
 
-    let suffix = format!("_{:?}", model);
+    let suffix = format!("_{:?}", strategy);
     let sharpen_suffix = sharpen.map(|s| format!("_sharpen-{s}")).unwrap_or_default();
     parent.join(format!(
         "{stem}_denoised_strength-{strength}{suffix}{sharpen_suffix}.png"
@@ -84,12 +84,12 @@ fn choose_output_path(
     user_output: Option<&PathBuf>,
     strength: u8,
     sharpen: Option<u8>,
-    model: Model,
+    strategy: Strategy,
     format: &ImageSourceFormat,
 ) -> PathBuf {
     let mut base = user_output
         .cloned()
-        .unwrap_or_else(|| default_output_path(input, strength, sharpen, model));
+        .unwrap_or_else(|| default_output_path(input, strength, sharpen, strategy));
 
     let is_tiff = match format {
         ImageSourceFormat::Tiff { .. } => true,
@@ -164,7 +164,7 @@ mod tests {
             output: Some(output),
             strength: 3,
             sharpen: Some(2),
-            model: Model::Experimental,
+            strategy: Strategy::Experimental,
         };
 
         run_with_pipelines(args, &pipelines, loaded).expect("run experimental with sharpen");
@@ -189,7 +189,7 @@ mod tests {
             output: Some(output),
             strength: 2,
             sharpen: None,
-            model: Model::Default,
+            strategy: Strategy::Default,
         };
 
         run_with_pipelines(args, &pipelines, loaded).expect("run standard without sharpen");
@@ -218,7 +218,7 @@ mod tests {
             output: Some(output),
             strength: 4,
             sharpen: Some(2),
-            model: Model::Default,
+            strategy: Strategy::Default,
         };
 
         run_with_pipelines(args, &pipelines, loaded).expect("run standard with sharpen");
@@ -244,7 +244,7 @@ mod tests {
             output: Some(output),
             strength: 3,
             sharpen: None,
-            model: Model::Experimental,
+            strategy: Strategy::Experimental,
         };
 
         run_with_pipelines(args, &pipelines, loaded).expect("run experimental without sharpen");

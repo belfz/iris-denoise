@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 
 #[derive(ValueEnum, Debug, Copy, Clone, Eq, PartialEq)]
-pub enum Model {
+pub enum Strategy {
     Default,
     Experimental,
     ATrous,
@@ -40,7 +40,7 @@ pub struct Args {
     )]
     pub sharpen: Option<u8>,
 
-    /// Model to use for denoising. Choose between Default, Experimental, and ATrous.
-    #[arg(short, long, value_parser = clap::value_parser!(Model))]
-    pub model: Model,
+    /// Strategy (algorithm) to use for denoising. Choose between Default, Experimental, and ATrous.
+    #[arg(short, long, value_parser = clap::value_parser!(Strategy))]
+    pub strategy: Strategy,
 }
